@@ -41,6 +41,10 @@ def test_extract_sentinel2_features(tmp_path):
         transform=transform,
     ) as dst:
         dst.write(data)
+        dst.set_band_description(1, "B03")
+        dst.set_band_description(2, "B04")
+        dst.set_band_description(3, "B08")
+        dst.set_band_description(4, "B11")
 
     features = extract_sentinel2_features(raster_path)
 
@@ -54,3 +58,30 @@ def test_extract_sentinel2_features(tmp_path):
     assert "ndwi_mean" in features
     assert "mndwi_mean" in features
     assert "water_ratio" in features
+    
+def test_missing_required_band_is_rejected(tmp_path):
+    raster_path = tmp_path / "missing_band.tif"
+
+    data = np.ones((3, 10, 10), dtype=np.float32)
+
+    with rasterio.open(
+        raster_path,
+        "w",
+        driver="GTiff",
+        height=10,
+        width=10,
+        count=3,
+        dtype="float32",
+        crs="EPSG:4326",
+    ) as dst:
+        dst.write(data)
+        dst.set_band_description(1, "B03")
+        dst.set_band_description(2, "B04")
+        dst.set_band_description(3, "B08")
+
+    try:
+        extract_sentinel2_features(raster_path)
+    except ValueError as exc:
+        assert "B11" in str(exc)
+    else:
+        raise AssertionError("Expected missing B11 to raise ValueError")

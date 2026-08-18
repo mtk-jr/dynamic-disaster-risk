@@ -6,6 +6,9 @@ import numpy as np
 import rasterio
 
 
+REQUIRED_BANDS = ("B03", "B04", "B08", "B11")
+
+
 def normalized_difference(
     a: np.ndarray,
     b: np.ndarray,
@@ -26,13 +29,57 @@ def _safe_mean(values: np.ndarray) -> float:
 
 
 def _safe_std(values: np.ndarray) -> float:
-    """Return a finite standard deviation."""
+    """Return a finite standard deviation, or 0.0 if no valid pixels exist."""
     values = values[np.isfinite(values)]
 
     if values.size == 0:
         return 0.0
 
     return float(np.std(values))
+
+
+def _normalise_band_name(name: str) -> str:
+    """Normalize common Sentinel-2 band naming variants."""
+    name = name.strip().upper().replace("-", "").replace("_", "")
+
+    if name.startswith("B"):
+        return name
+
+    return f"B{name}"
+
+
+def _get_band_map(src: rasterio.DatasetReader) -> dict[str, int]:
+    """
+    Build a Sentinel-2 band-name → raster band-index mapping.
+
+    Band descriptions are expected to contain names such as B03, B04,
+    B08 and B11.
+    """
+    band_map: dict[str, int] = {}
+
+    for index, description in enumerate(src.descriptions, start=1):
+        if description is None:
+            continue
+
+        name = _normalise_band_name(description)
+
+        if name in REQUIRED_BANDS:
+            band_map[name] = index
+
+    missing = [
+        band for band in REQUIRED_BANDS
+        if band not in band_map
+    ]
+
+    if missing:
+        raise ValueError(
+            "Missing required Sentinel-2 bands: "
+            + ", ".join(missing)
+            + ". Raster band descriptions must identify "
+              "B03, B04, B08 and B11."
+        )
+
+    return band_map
 
 
 def extract_sentinel2_features(
@@ -42,38 +89,32 @@ def extract_sentinel2_features(
     Extract an 8-dimensional flood-oriented feature vector
     from a Sentinel-2 GeoTIFF.
 
-    Expected bands:
+    Required bands:
         B03 - Green
         B04 - Red
         B08 - NIR
         B11 - SWIR
 
-    Returns:
-        Dictionary containing eight numerical features.
+    The raster must identify these bands through Rasterio band
+    descriptions.
     """
-
     path = Path(path)
 
     with rasterio.open(path) as src:
-        if src.count < 4:
-            raise ValueError(
-                "The raster must contain at least four bands "
-                "(B03, B04, B08, B11)."
-            )
+        band_map = _get_band_map(src)
 
-        data = src.read().astype(np.float32)
+        b03 = src.read(band_map["B03"]).astype(np.float32)
+        b04 = src.read(band_map["B04"]).astype(np.float32)
+        b08 = src.read(band_map["B08"]).astype(np.float32)
+        b11 = src.read(band_map["B11"]).astype(np.float32)
 
         nodata = src.nodata
 
     if nodata is not None:
-        data[data == nodata] = np.nan
-
-    # Current baseline assumes the first four channels correspond
-    # to B03, B04, B08 and B11.
-    b03 = data[0]
-    b04 = data[1]
-    b08 = data[2]
-    b11 = data[3]
+        b03[b03 == nodata] = np.nan
+        b04[b04 == nodata] = np.nan
+        b08[b08 == nodata] = np.nan
+        b11[b11 == nodata] = np.nan
 
     ndvi = normalized_difference(b08, b04)
     ndwi = normalized_difference(b03, b08)
@@ -91,22 +132,17 @@ def extract_sentinel2_features(
     if valid_pixels == 0:
         raise ValueError("Raster contains no valid pixels.")
 
-    # Simple water/flood-oriented thresholds.
     water_mask = (mndwi > 0.0) & valid
 
     water_ratio = float(np.mean(water_mask[valid]))
 
-    features = {
+    return {
         "ndvi_mean": _safe_mean(ndvi),
         "ndwi_mean": _safe_mean(ndwi),
         "mndwi_mean": _safe_mean(mndwi),
         "ndwi_std": _safe_std(ndwi),
         "mndwi_std": _safe_std(mndwi),
         "water_ratio": water_ratio,
-        "valid_pixel_ratio": float(
-            valid_pixels / valid.size
-        ),
+        "valid_pixel_ratio": float(valid_pixels / valid.size),
         "mean_nir": _safe_mean(b08),
     }
-
-    return features
