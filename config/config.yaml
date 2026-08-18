@@ -1,0 +1,21 @@
+project:
+  name: dynamic-disaster-risk
+  primary_hazard: flood
+  seed: 42
+
+model:
+  satellite_dim: 8
+  iot_dim: 8
+  gis_dim: 8
+  social_dim: 8
+  hidden_dim: 128
+  fusion_dim: 64
+  num_classes: 4
+  dropout: 0.20
+
+training:
+  epochs: 50
+  batch_size: 64
+  learning_rate: 0.001
+  test_size: 0.20
+  validation_size: 0.10
